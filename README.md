@@ -7,3 +7,5 @@ This script matches predicted strong-binding peptides from MHCflurry (strong_pep
 
 This script cross-checks strong-binding peptides predicted by MHCflurry (strong_peptides.csv) against known tumor-associated peptides from the Cancer Peptide Atlas (caAtlas_non_mod_peptides.csv).
 Peptides that appear in both datasets are saved to caAtlas_matches.csv, allowing identification of microbial peptides already observed in tumor samples.
+
+This script extracts all possible 8–11 amino acid peptides from a FASTA file of protein sequences (idmapping_2025_06_29.fasta). It generates a peptide list formatted for MHCflurry binding prediction and saves it as peptides.csv. Non-standard amino acids (X, U, B) are excluded. Each peptide is paired with the specified MHC allele (e.g., HLA-A*02:01).
