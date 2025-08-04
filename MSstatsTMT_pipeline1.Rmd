@@ -1,0 +1,254 @@
+---
+title: "MSstatsTMT Analysis with Manual Format Conversion"
+author: "Amit Ambar, Adi Zohar"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Block 1  - installations and data loading
+
+```{r setup, message=TRUE, warning=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load required libraries
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install("MSstatsTMT", ask = FALSE, update = FALSE, force = TRUE)
+
+if (!requireNamespace("ggrepel", quietly = TRUE)) install.packages("ggrepel")
+library(ggrepel)
+
+
+library(MSstatsTMT)
+library(dplyr)
+library(ggplot2)
+library(EnhancedVolcano)
+
+# File list and biological conditions
+datasets <- list(
+  berle = list(file = "berle/protein.tsv",
+               conditions = c("Reference", "Primary", "Recurrent", "Primary", "Recurrent", 
+                              "Primary", "Recurrent", "Primary", "Recurrent", "Primary")),
+  munro = list(file = "munro/protein.tsv",
+               conditions = c("Reference", "LowGrade", "HighGrade", "LowGrade", "HighGrade",
+                              "LowGrade", "HighGrade", "LowGrade", "HighGrade", "LowGrade")),
+  chen = list(file = "chen/protein.tsv",
+              conditions = c("Reference", "Normal", "Tumor", "Normal", "Tumor",
+                             "Normal", "Tumor", "Normal", "Tumor", "Normal"))
+)
+
+# TMT channel labels (10-plex)
+channels <- c("126", "127N", "127C", "128N", "128C", 
+              "129N", "129C", "130N", "130C", "131")
+
+# Generate annotation files
+for (name in names(datasets)) {
+  conds <- datasets[[name]]$conditions
+  annotation <- data.frame(
+    Mixture = 1,
+    TechRepMixture = 1,
+    Run = 1,
+    Channel = channels,
+    Condition = conds,
+    BioReplicate = seq_along(conds)
+  )
+  write.table(annotation, paste0(name, "_annotation.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+}
+```
+
+
+Block 2 -  convert protein.tsv to MSstatsTMT format
+
+```{r analyze, echo=TRUE, message=TRUE, warning=TRUE}
+
+convert_from_protein_file <- function(df, conditions) {
+  intensity_cols <- grep("^sample\\.", colnames(df), value = TRUE)
+  
+  stopifnot(length(intensity_cols) == length(conditions))
+
+  channels <- c("126", "127N", "127C", "128N", "128C",
+                "129N", "129C", "130N", "130C", "131")[seq_along(intensity_cols)]
+
+  out <- do.call(rbind, lapply(seq_len(nrow(df)), function(i) {
+    row <- df[i, ]
+    intensities <- as.numeric(row[intensity_cols])
+    if (all(is.na(intensities))) return(NULL)
+
+    data.frame(
+      ProteinName = rep(row$Protein, length(intensity_cols)),
+      PeptideSequence = paste0("PEPTIDE_", i),
+      PSM = paste0("PSM_", i),
+      Charge = 2,
+      Mixture = 1,
+      TechRepMixture = 1,
+      Run = 1,
+      Channel = channels,
+      Intensity = intensities
+    )
+  }))
+
+  return(out)
+}
+
+# Convert protein.tsv into MSstatsTMT format
+for (name in names(datasets)) {
+  df <- read.delim(datasets[[name]]$file, sep = "\t", stringsAsFactors = FALSE)
+  conds <- datasets[[name]]$conditions
+  converted <- convert_from_protein_file(df, conds)
+  write.table(converted, paste0(name, "_converted.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+}
+
+results_list <- list()
+
+for (name in names(datasets)) {
+  quant_file <- paste0(name, "_converted.tsv")
+  annot_file <- paste0(name, "_annotation.tsv")
+
+  quant_data <- read.delim(quant_file, sep = "\t", stringsAsFactors = FALSE)
+  annot <- read.delim(annot_file, sep = "\t", stringsAsFactors = FALSE)
+
+  # Force matching types for merge
+  force_char <- function(df, cols) {
+    for (col in cols) {
+      df[[col]] <- as.character(df[[col]])
+    }
+    return(df)
+  }
+
+  merge_keys <- c("Mixture", "TechRepMixture", "Run", "Channel")
+  quant_data <- force_char(quant_data, merge_keys)
+  annot <- force_char(annot, merge_keys)
+
+  merged <- merge(
+    quant_data,
+    annot,
+    by = merge_keys,
+    all.x = TRUE
+  )
+
+  # Check if merge succeeded
+  if (!all(c("Condition", "BioReplicate") %in% colnames(merged))) {
+    stop("Merge failed: Condition and BioReplicate are missing.")
+  }
+  if (any(is.na(merged$Condition)) || any(is.na(merged$BioReplicate))) {
+    warning(" Some rows in merged data are missing Condition or BioReplicate:")
+    print(head(merged[is.na(merged$Condition) | is.na(merged$BioReplicate), ]))
+  }
+
+  # Filter problematic rows
+  merged <- merged %>% filter(!is.na(Intensity) & Intensity > 0)
+
+  # Keep only proteins with at least 6 channels
+  merged <- merged %>%
+    group_by(ProteinName, Run) %>%
+    filter(n() >= 6) %>%
+    ungroup()
+
+  # Deduplicate (one row per Protein + Run + Channel)
+  merged <- merged %>%
+    group_by(ProteinName, Run, Channel) %>%
+    slice(1) %>%
+    ungroup()
+
+  if (nrow(merged) == 0) {
+    message("Skipping dataset '", name, "' — no valid proteins after filtering.")
+    next
+  }
+
+  summarization <- proteinSummarization(
+    data = merged,
+    method = "MedianPolish",
+    global_norm = TRUE,
+    reference_norm = TRUE,
+    MBimpute = TRUE,
+    maxQuantileforCensored = 0.95
+  )
+
+  conds <- setdiff(unique(annot$Condition), "Reference")
+  contrast <- matrix(0, nrow = length(conds), ncol = length(unique(annot$Condition)))
+  colnames(contrast) <- unique(annot$Condition)
+  rownames(contrast) <- paste0(conds, "_vs_Reference")
+  for (i in seq_along(conds)) {
+    contrast[i, "Reference"] <- -1
+    contrast[i, conds[i]] <- 1
+  }
+
+  group_result <- groupComparisonTMT(
+    contrast.matrix = contrast,
+    data = summarization
+  )
+
+  write.csv(group_result$ComparisonResult, paste0(name, "_DA_proteins.csv"), row.names = FALSE)
+  results_list[[name]] <- group_result$ComparisonResult
+}
+
+# Volcano plots
+for (name in names(results_list)) {
+  df <- results_list[[name]]
+  if (!all(c("log2FC", "adj.pvalue", "pvalue") %in% colnames(df))) next
+
+  df <- df %>%
+    filter(!is.na(log2FC), !is.na(adj.pvalue)) %>%
+    mutate(Significant = ifelse(abs(log2FC) > 0.6 & pvalue < 0.1, "Significant", "Not Significant"))
+
+  v <- EnhancedVolcano(
+    df,
+    lab = df$Protein,
+    x = "log2FC",
+    y = "pvalue",
+    pCutoff = 0.1,
+    FCcutoff = 0.6,
+    pointSize = 3.0,
+    title = paste("Volcano Plot -", name),
+    subtitle = "Differentially Abundant Proteins",
+    caption = "MSstatsTMT"
+  )
+
+  print(v)
+}
+
+
+```
+
+
+```{r test}
+# Save and display significant proteins
+significant_proteins <- list()
+
+for (name in names(results_list)) {
+  df <- results_list[[name]]
+  if (!all(c("log2FC", "adj.pvalue", "pvalue") %in% colnames(df))) next
+  
+  sig_df <- df %>%
+    filter(!is.na(log2FC), !is.na(pvalue)) %>%
+    filter(abs(log2FC) > 0.6, pvalue < 0.1)
+
+  significant_proteins[[name]] <- sig_df
+
+  write.csv(sig_df, paste0(name, "_significant_proteins.csv"), row.names = FALSE)
+}
+
+
+library(knitr)
+for (name in names(significant_proteins)) {
+  cat("\n\n### Significant Proteins -", name, "\n")
+  df <- significant_proteins[[name]]
+  if (nrow(df) > 0) {
+    print(kable(df, caption = paste("Top Differential Proteins in", name)))
+  } else {
+    cat("No significant proteins found for this dataset.\n")
+  }
+}
+
+```
+
+
+```{r summary, echo=FALSE}
+summary_text <- lapply(names(results_list), function(name) {
+  df <- results_list[[name]]
+  sig_count <- sum(!is.na(df$adj.pvalue) & df$adj.pvalue < 0.9 & abs(df$log2FC) > 0.01)
+  paste0(" Dataset '", name, "' — ", sig_count, " differentially abundant proteins.")
+})
+cat("### Final Summary:\n", paste(summary_text, collapse = "\n"))
+```
+
