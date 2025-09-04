@@ -71,6 +71,27 @@ This script filters MHCflurry prediction results (`predictions.csv`) to identify
 
 ---
 
+
+## MHCFlurry command
+
+**File:** `mhcflurry.sh`
+
+This sh script includes a single bash command, to run mhcflurry
+
+**Output:**
+- `predictions.csv` — used  to predict peptides wich have strong biding to MHC.
+
+---
+
+
+## Visualise results
+
+**File:** `peptide_plots.ipynb`
+
+This jupyter notebook has some graphs to visualise and better understand the results of the project.
+
+---
+
 ## Summary
 
 Each script contributes to identifying microbial peptides with potential immunogenicity in cancer:
@@ -79,3 +100,6 @@ Each script contributes to identifying microbial peptides with potential immunog
 - **IEDB** and **Cancer Peptide Atlas** provide external validation
 
 Use this pipeline to trace bacterial peptides through tumor proteomics and assess their immune relevance.
+
+
+To try it yourself, clone the repository, and put the data in the same directory of the files, and then run. Make sure you have all of the packages already installed.
