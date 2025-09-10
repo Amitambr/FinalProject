@@ -102,4 +102,12 @@ Each script contributes to identifying microbial peptides with potential immunog
 Use this pipeline to trace bacterial peptides through tumor proteomics and assess their immune relevance.
 
 
-To try it yourself, clone the repository, and put the data in the same directory of the files, and then run. Make sure you have all of the packages already installed.
+To try it yourself, clone the repository, and put the data in the same directory of the files, and then run. Make sure you have all of the packages already installed. Some files needed to download first as they are too big to be on github (e.g `` epitope_full_v3.csv `` and ``caAtlas_non_mod_peptides.csv``).
+
+# To download ``epitope_full_v3.csv``
+https://www.iedb.org/downloader.php?file_name=doc/epitope_full_v3.zip
+
+# To download ``caAtlas_non_mod_peptides.csv``
+
+https://catlas.org/mousebrain/#!/downloads
+
